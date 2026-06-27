@@ -8,7 +8,7 @@ DB_CONFIG = {
     "port": "5432", # put your credentials here
     "dbname": "assignment3", # put your credentials here
     "user": "postgres", # put your credentials here
-    "password": "_Rostik_281107_", # put your credentials here
+    "password": "1", # put your credentials here
 }
 
 
