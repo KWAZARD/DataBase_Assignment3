@@ -1,74 +1,151 @@
-select * from order_log;
+
+CREATE OR REPLACE FUNCTION calculate_order_total(p_order_id int)
+RETURNS numeric AS $$
+DECLARE
+    total numeric; -- DECLARE має бути ДО begin!
+BEGIN
+    SELECT coalesce(sum(oi.quantity * oi.price), 0) INTO total
+    FROM order_items oi
+    WHERE oi.order_id = p_order_id;
+    
+    RETURN total;
+END;
+$$ LANGUAGE plpgsql;
 
 
-create function calculate_order_total(p_order_id int)
-returns numeric as $$
-total numeric;
-begin
-select coalesce(sum(oi.quantity * oi.price), 0) into total
-from order_items oi
-where oi.order_id = p_order_id;
-return total;
-end;
 
-create procedure create_order(p_customer_id int)
-language plpgsql
-as $$
-if not exists (select 1 from customers where customer_id = p_customer_id) then
-    raise exception 'Customer with ID % does not exist', p_customer_id;
-end if;
-declare
+CREATE OR REPLACE PROCEDURE create_order(p_customer_id int)
+LANGUAGE plpgsql
+AS $$
+DECLARE
     new_order_id int;
-    new_date timestamp := current_timestamp;
-begin
-    new_order_id = select nextval('orders_order_id_seq');
-    insert into orders (order_id, customer_id, order_date, total_amount)
-    values (new_order_id, p_customer_id, new_date, 0);
-end;
+    new_date timestamp := clock_timestamp();
+BEGIN
+    
+    IF NOT EXISTS (SELECT 1 FROM customers WHERE customer_id = p_customer_id) THEN
+        RAISE EXCEPTION 'Customer with ID % does not exist', p_customer_id;
+    END IF;
+
+    new_order_id := nextval('orders_order_id_seq');
+    
+    INSERT INTO orders (order_id, customer_id, order_date, total_amount)
+    VALUES (new_order_id, p_customer_id, new_date, 0);
+END;
+$$;
 
 
-
-
-
-
-create procedure add_product_to_order(p_order_id int, p_product_id int, p_quantity int)
-language plpgsql
-as $$   
-if not exists (select 1 from orders where order_id = p_order_id) then
-    raise exception 'Order with ID % does not exist', p_order_id;
-end if;
-if not exists (select 1 as product from products where product_id = p_product_id) then
-    raise exception 'Product with ID % does not exist', p_product_id;
-end if;
-if (select stock_quantity from products where product_id = p_product_id) - p_quantity <= 0 then
-    raise exception 'Insufficient stock for product with ID %', p_product_id;
-end if;
-declare
+CREATE OR REPLACE PROCEDURE add_product_to_order(p_order_id int, p_product_id int, p_quantity int)
+LANGUAGE plpgsql
+AS $$   
+DECLARE
     product_price numeric;
-begin
-    select price from products 
-    where p_product_id = product_id into product_price;
-    insert into order_items(order_id, product_id, quantity, price)
-    values (p_order_id, p_product_id, p_quantity, product_price);
-    update orders set total_amount = calculate_order_total(p_order_id)
-    where order_id = p_order_id;
-    update products set stock_quantity = stock_quantity - p_quantity
-    where product_id = p_product_id;
-end;
+    current_stock int;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM orders WHERE order_id = p_order_id) THEN
+        RAISE EXCEPTION 'Order with ID % does not exist', p_order_id;
+    END IF;
+    
+  
+    SELECT price, stock_quantity INTO product_price, current_stock 
+    FROM products 
+    WHERE product_id = p_product_id;
+
+    IF product_price IS NULL THEN
+        RAISE EXCEPTION 'Product with ID % does not exist', p_product_id;
+    END IF;
+
+  
+    IF p_quantity <= 0 THEN
+        RAISE EXCEPTION 'Quantity must be greater than 0';
+    END IF;
+
+    IF current_stock - p_quantity < 0 THEN
+        RAISE EXCEPTION 'Insufficient stock for product with ID %', p_product_id;
+    END IF;
+
+    -- Вставка та оновлення стоку
+    INSERT INTO order_items(order_id, product_id, quantity, price)
+    VALUES (p_order_id, p_product_id, p_quantity, product_price);
+    
+    UPDATE products SET stock_quantity = stock_quantity - p_quantity
+    WHERE product_id = p_product_id;
+END;
+$$;
+
+
+
+CREATE OR REPLACE FUNCTION recalculate_total()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_order_id int;
+BEGIN
+   
+    IF TG_OP = 'DELETE' THEN
+        v_order_id := OLD.order_id;
+    ELSE
+        v_order_id := NEW.order_id;
+    END IF;
+
+    
+    UPDATE orders 
+    SET total_amount = calculate_order_total(v_order_id)
+    WHERE order_id = v_order_id;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+DROP TRIGGER IF EXISTS trigger_recalculate_order_total ON order_items;
+
+CREATE TRIGGER trigger_recalculate_order_total
+AFTER INSERT OR UPDATE OR DELETE ON order_items
+FOR EACH ROW
+EXECUTE FUNCTION recalculate_total();
+
+
+CREATE OR REPLACE FUNCTION log_order()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO order_log (order_id, customer_id, action)
+    VALUES (NEW.order_id, NEW.customer_id, 'created');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+DROP TRIGGER IF EXISTS log_order_creation_trigger ON orders;
+
+CREATE TRIGGER log_order_creation_trigger
+AFTER INSERT ON orders
+FOR EACH ROW
+EXECUTE FUNCTION log_order();
+
+
+
+--=================Main script=================
+
+
+CALL create_order(1);
+
+
+
+CALL add_product_to_order(5, 3, 49);
+
+
+SELECT * FROM orders;
+SELECT * FROM order_log;
+select * from order_items;
+select * from products;
+select * from customers;
 
 
 
 
 
 
-
-
-create table customers (
-    customer_id serial primary key,
-    full_name varchar(100) not null,
-    email varchar(100) unique not null,
-    balance numeric(10,2) default 0
-);
 
 create table products (
     product_id serial primary key,
