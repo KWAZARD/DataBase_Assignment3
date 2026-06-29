@@ -127,12 +127,16 @@ CALL create_order(1);
 CALL add_product_to_order(5, 3, 49);
 
 
-SELECT * FROM orders;
-SELECT * FROM order_log;
-select * from order_items;
-select * from products;
-select * from customers;
-
+EXPLAIN ANALYZE
+SELECT
+    oi.order_id,
+    p.product_name,
+    oi.quantity,
+    oi.price,
+    oi.quantity * oi.price AS item_total
+FROM order_items oi
+JOIN products p ON oi.product_id = p.product_id
+WHERE oi.order_id = 1;
 
 
 
